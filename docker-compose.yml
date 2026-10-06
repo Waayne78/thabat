@@ -1,0 +1,70 @@
+name: thabat
+
+x-backend: &backend
+  build: ./backend
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-thabat}:${POSTGRES_PASSWORD:-thabat}@db:5432/${POSTGRES_DB:-thabat}
+    JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-dev-only-secret}
+    ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+    REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
+    COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+    DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Paris}
+    QURAN_SOURCE: ${QURAN_SOURCE:-alquran_cloud}
+    QURAN_ARABIC_EDITION: ${QURAN_ARABIC_EDITION:-quran-uthmani}
+    QURAN_TRANSLATION_EDITION: ${QURAN_TRANSLATION_EDITION:-fr.hamidullah}
+    QURAN_TRANSLITERATION_EDITION: ${QURAN_TRANSLITERATION_EDITION:-en.transliteration}
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-thabat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-thabat}
+      POSTGRES_DB: ${POSTGRES_DB:-thabat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thabat} -d ${POSTGRES_DB:-thabat}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    <<: *backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 40s
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.reminder_worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-thabat}:${POSTGRES_PASSWORD:-thabat}@db:5432/${POSTGRES_DB:-thabat}
+      SEED_ON_START: "false"
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Paris}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
